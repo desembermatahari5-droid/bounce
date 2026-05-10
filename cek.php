@@ -10,7 +10,7 @@ set_time_limit(15);
 |--------------------------------------------------------------------------
 */
 
-$mxTimeout = 6;
+$mxTimeout   = 6;
 $smtpTimeout = 6;
 
 $mxHosts = [
@@ -20,15 +20,13 @@ $mxHosts = [
     "mx2a1.comcast.net",
 ];
 
-$mailFrom = "customer@laacademy.id";
-
 /*
 |--------------------------------------------------------------------------
 | INPUT
 |--------------------------------------------------------------------------
 */
 
-$raw = file_get_contents("php://input");
+$raw  = file_get_contents("php://input");
 $data = json_decode($raw, true);
 
 if (!is_array($data) || empty($data["email"])) {
@@ -36,7 +34,7 @@ if (!is_array($data) || empty($data["email"])) {
     http_response_code(400);
 
     echo json_encode([
-        "status" => "error",
+        "status"  => "error",
         "message" => "Invalid request (email required)"
     ]);
 
@@ -44,6 +42,28 @@ if (!is_array($data) || empty($data["email"])) {
 }
 
 $email = trim($data["email"]);
+
+/*
+|--------------------------------------------------------------------------
+| AUTO MAIL FROM (CURRENT DOMAIN)
+|--------------------------------------------------------------------------
+*/
+
+$host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
+
+$host = preg_replace('/^www\./', '', $host);
+
+$parts = explode('.', $host);
+
+$count = count($parts);
+
+if ($count >= 2) {
+    $domain = $parts[$count - 2] . '.' . $parts[$count - 1];
+} else {
+    $domain = $host;
+}
+
+$mailFrom = "customer@" . $domain;
 
 /*
 |--------------------------------------------------------------------------
@@ -61,7 +81,9 @@ function readSmtp($socket)
 
         $line = @fgets($socket, 1024);
 
-        if (!$line) break;
+        if (!$line) {
+            break;
+        }
 
         $data .= $line;
 
@@ -86,9 +108,10 @@ function checkMx($host, $email, $mailFrom, $smtpTimeout)
     $ip = @gethostbyname($host);
 
     if (!$ip || $ip === $host) {
+
         return [
             "status" => "dns_failed",
-            "log" => ["DNS failed"]
+            "log"    => ["DNS failed"]
         ];
     }
 
@@ -97,35 +120,48 @@ function checkMx($host, $email, $mailFrom, $smtpTimeout)
     $socket = @fsockopen($ip, 25, $errno, $errstr, $smtpTimeout);
 
     if (!$socket) {
+
         return [
             "status" => "connect_failed",
-            "log" => array_merge($log, ["CONNECT FAIL: $errstr"])
+            "log"    => array_merge($log, [
+                "CONNECT FAIL: $errstr"
+            ])
         ];
     }
 
     stream_set_timeout($socket, $smtpTimeout);
 
     $banner = readSmtp($socket);
+
     $log[] = "BANNER: $banner";
 
-    fwrite($socket, "EHLO laacademy.id\r\n");
-    $log[] = "EHLO: " . readSmtp($socket);
+    fwrite($socket, "EHLO {$domain}\r\n");
+
+    $ehlo = readSmtp($socket);
+
+    $log[] = "EHLO: $ehlo";
 
     fwrite($socket, "MAIL FROM:<{$mailFrom}>\r\n");
-    $log[] = "MAIL FROM: " . readSmtp($socket);
+
+    $mailResp = readSmtp($socket);
+
+    $log[] = "MAIL FROM: $mailResp";
 
     fwrite($socket, "RCPT TO:<{$email}>\r\n");
+
     $rcpt = readSmtp($socket);
 
     $log[] = "RCPT TO: $rcpt";
 
     fwrite($socket, "QUIT\r\n");
+
     fclose($socket);
 
     if (strpos($rcpt, "250") !== false) {
+
         return [
             "status" => "valid",
-            "log" => $log
+            "log"    => $log
         ];
     }
 
@@ -133,15 +169,16 @@ function checkMx($host, $email, $mailFrom, $smtpTimeout)
         strpos($rcpt, "550") !== false ||
         strpos($rcpt, "5.1.1") !== false
     ) {
+
         return [
             "status" => "invalid",
-            "log" => $log
+            "log"    => $log
         ];
     }
 
     return [
         "status" => "unknown",
-        "log" => $log
+        "log"    => $log
     ];
 }
 
@@ -152,26 +189,37 @@ function checkMx($host, $email, $mailFrom, $smtpTimeout)
 */
 
 $result = [
-    "email" => $email,
-    "status" => "not_checked",
-    "mx_used" => null,
-    "steps" => []
+    "email"     => $email,
+    "mail_from" => $mailFrom,
+    "status"    => "not_checked",
+    "mx_used"   => null,
+    "steps"     => []
 ];
 
 foreach ($mxHosts as $mx) {
 
-    $check = checkMx($mx, $email, $mailFrom, $smtpTimeout);
+    $check = checkMx(
+        $mx,
+        $email,
+        $mailFrom,
+        $smtpTimeout
+    );
 
     $result["steps"][] = [
-        "mx" => $mx,
+        "mx"     => $mx,
         "result" => $check
     ];
 
     $result["mx_used"] = $mx;
 
-    // stop jika sudah jelas hasilnya
-    if ($check["status"] === "valid" || $check["status"] === "invalid") {
+    // stop jika hasil sudah jelas
+    if (
+        $check["status"] === "valid" ||
+        $check["status"] === "invalid"
+    ) {
+
         $result["status"] = $check["status"];
+
         break;
     }
 }
@@ -182,4 +230,7 @@ foreach ($mxHosts as $mx) {
 |--------------------------------------------------------------------------
 */
 
-echo json_encode($result, JSON_PRETTY_PRINT);
+echo json_encode(
+    $result,
+    JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+);
